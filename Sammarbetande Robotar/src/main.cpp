@@ -39,34 +39,35 @@ void cmd_parse (char msg[256]){
       digitalWrite(dir_right, LOW);
       analogWrite(motor_left, p);
       analogWrite(motor_right, p);
-      Serial.println("r");
+      Serial.println("1r");
       break;
   case 'l':
       digitalWrite(dir_left, LOW);
       digitalWrite(dir_right, HIGH);
       analogWrite(motor_left, p);
       analogWrite(motor_right, p);
-      Serial.println("l");
+      Serial.println("1l");
       break;
   case 'f':
-      digitalWrite(dir_left, HIGH);
-      digitalWrite(dir_right, HIGH);
+      digitalWrite(dir_left, LOW);
+      digitalWrite(dir_right, LOW);
       analogWrite(motor_left, p);
       analogWrite(motor_right, p);
-      Serial.println("f");
+      Serial.println("1f");
       break;
   case 's':
       digitalWrite(dir_left, HIGH);
       digitalWrite(dir_right, HIGH);
       analogWrite(motor_left, 0);
       analogWrite(motor_right, 0);
-      Serial.println("s");
+      Serial.println("1s");
       break;
   default:
       Serial.print("Unknown command: ");
       Serial.println(msg);
     break;
   }
+
 
   
 };
