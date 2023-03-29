@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
+#include <math.h>
 
 #define motor_left 5
 #define dir_left 0
@@ -9,12 +10,17 @@
 
 const char *ssid = "ABBgym_2.4";
 const char *password = "mittwifiarsabra";
-const char *mqtt_server = "10.22.4.161";
+const char *mqtt_server = "10.22.2.8";
 
 WiFiClient espClient;
 PubSubClient client(espClient);
 
-float p = 400;
+float integral = 0, derivative = 0;
+union
+{
+  float f[4] = {0.005, 0.01, 0.002, 900.0};
+  char b[16];
+} pidConst;
 
 char cmd_buf[256];
 
@@ -86,6 +92,13 @@ void callback(char *topic, byte *payload, unsigned int length)
       digitalWrite(dir_right, true);
     }
   }
+  else if (strcmp(topic, "setPidConst") == 0)
+  {
+    for (uint8_t i = 0; i < length; i++)
+    {
+      pidConst.b[i] = payload[i];
+    }
+  }
   else
   {
     Serial.printf("Unknown topic\npayload(string,hex): %s, %x", payload, payload);
@@ -106,6 +119,7 @@ void reconnect()
       client.publish("inTopic", "hello world");
       // ... and resubscribe
       client.subscribe("test");
+      client.subscribe("setPidConst");
 
       client.publish("inTopic", "3Y");
     }
@@ -120,6 +134,22 @@ void reconnect()
   }
 }
 
+float pid(float err, float pc, float ic, float dc)
+{
+  integral = +err;
+  derivative = err - derivative;
+  return err * pc + integral * ic + derivative * dc;
+}
+
+void setMotors(float speed, float right, float left)
+{
+  digitalWrite(dir_left, left < 0);
+  digitalWrite(dir_right, right < 0);
+  analogWrite(motor_left, fabsf(speed * left));
+  analogWrite(motor_right, fabsf(speed * right));
+  Serial.printf("s:%f,r:%f,l:%f\nr:%f,l:%f\n", speed, right, left, fabsf(speed * right), fabsf(speed * left));
+}
+
 void cmd_parse(char msg[256])
 {
   char cmd = msg[0];
@@ -129,11 +159,45 @@ void cmd_parse(char msg[256])
     args[i] = msg[i + 1];
   }
 
-  String argString = args;
-  p = 10.0 * argString.toFloat();
+  // String argString = args;
+  // p = 10.0 * argString.toFloat();
 
   switch (cmd)
   {
+  case 'a':
+    // f[0]: speed, f[1]: right, f[2]: left
+    union
+    {
+      float f[3];
+      char b[12];
+    } srl;
+    for (size_t i = 0; i < 12; i++)
+    {
+      srl.b[i] = msg[i + 1];
+    }
+    setMotors(srl.f[0], srl.f[1], srl.f[2]);
+    break;
+  case 'e':
+    float pidO, left, right;
+    union
+    {
+      float e;
+      char b[4];
+    } err;
+    for (size_t i = 0; i < 4; i++)
+    {
+      err.b[i] = msg[i + 1];
+    }
+    Serial.println(err.e);
+    pidO = pid(err.e, pidConst.f[0], pidConst.f[1], pidConst.f[2]);
+
+    right = (pidO >= 0 ? 1 : pidO + 1);
+    left = (pidO <= 0 ? 1 : 1 - pidO);
+    right = (right < -1 ? -1 : right);
+    left = (left < -1 ? -1 : left);
+
+    setMotors(pidConst.f[3], right, left);
+    break;
   case 'p':
     Serial.print("1p");
     Serial.print(args);
@@ -148,20 +212,6 @@ void cmd_parse(char msg[256])
     delay(200);
     digitalWrite(LED_BUILTIN, HIGH);
     Serial.println("1b");
-    break;
-  case 'r':
-    digitalWrite(dir_left, HIGH);
-    digitalWrite(dir_right, LOW);
-    analogWrite(motor_left, p);
-    analogWrite(motor_right, p);
-    Serial.println("1r");
-    break;
-  case 'l':
-    digitalWrite(dir_left, LOW);
-    digitalWrite(dir_right, HIGH);
-    analogWrite(motor_left, p);
-    analogWrite(motor_right, p);
-    Serial.println("1l");
     break;
   case 'f':
     digitalWrite(dir_left, LOW);
@@ -196,6 +246,10 @@ void setup()
   pinMode(dir_left, OUTPUT);
   pinMode(motor_right, OUTPUT);
   pinMode(dir_right, OUTPUT);
+  pidConst.f[0] = 0.015;
+  pidConst.f[0] = 0.001;
+  pidConst.f[2] = 0.002;
+  pidConst.f[3] = 700;
 };
 
 void loop()
@@ -211,7 +265,7 @@ void loop()
     Serial.readBytesUntil('\n', cmd_buf, 256);
     Serial.print("Command recived: ");
     Serial.println(cmd_buf);
-    client.publish("message", cmd_buf);
+    // client.publish("message", cmd_buf);
     cmd_parse(cmd_buf);
   }
 }
