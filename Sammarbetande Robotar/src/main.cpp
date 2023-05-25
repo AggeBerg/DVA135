@@ -7,15 +7,25 @@
 #define dir_left 0
 #define motor_right 4
 #define dir_right 2
+#define LEFT 0
+#define RIGHT 1
 
 const char *ssid = "ABBgym_2.4";
 const char *password = "mittwifiarsabra";
-const char *mqtt_server = "10.22.2.8";
+const char *mqtt_server = "10.22.4.31";
 
 WiFiClient espClient;
 PubSubClient client(espClient);
 
+union main
+{
+  s32_t s32[2] = {0, 0};
+  uint8_t u8[8];
+} revolution;
+
 float integral = 0, derivative = 0;
+unsigned long lastInterupt[2], uartTime;
+sint8_t motorDir[2] = {1, 1};
 union
 {
   float f[4] = {0.005, 0.01, 0.002, 900.0};
@@ -143,6 +153,8 @@ float pid(float err, float pc, float ic, float dc)
 
 void setMotors(float speed, float right, float left)
 {
+  motorDir[LEFT] = (left < 0 ? -1 : 1);
+  motorDir[RIGHT] = (right < 0 ? -1 : 1);
   digitalWrite(dir_left, left < 0);
   digitalWrite(dir_right, right < 0);
   analogWrite(motor_left, fabsf(speed * left));
@@ -198,34 +210,24 @@ void cmd_parse(char msg[256])
 
     setMotors(pidConst.f[3], right, left);
     break;
-  case 'p':
-    Serial.print("1p");
-    Serial.print(args);
-    Serial.print('\n');
-    break;
   case 'm':
-    Serial.print("1m");
-    Serial.println(args);
+    client.publish("message", args);
     break;
-  case 'b':
-    digitalWrite(LED_BUILTIN, LOW);
-    delay(200);
-    digitalWrite(LED_BUILTIN, HIGH);
-    Serial.println("1b");
-    break;
-  case 'f':
-    digitalWrite(dir_left, LOW);
+  case 'r':
+    analogWrite(motor_left, pidConst.f[3]);
+    analogWrite(motor_right, pidConst.f[3]);
+    digitalWrite(dir_left, HIGH);
     digitalWrite(dir_right, LOW);
-    analogWrite(motor_left, 700);
-    analogWrite(motor_right, 700);
-    Serial.println("1f");
+    break;
+  case 'l':
+    analogWrite(motor_left, pidConst.f[3]);
+    analogWrite(motor_right, pidConst.f[3]);
+    digitalWrite(dir_left, LOW);
+    digitalWrite(dir_right, HIGH);
     break;
   case 's':
-    digitalWrite(dir_left, HIGH);
-    digitalWrite(dir_right, HIGH);
     analogWrite(motor_left, 0);
     analogWrite(motor_right, 0);
-    Serial.println("1s");
     break;
   default:
     Serial.print("Unknown command: ");
@@ -234,22 +236,56 @@ void cmd_parse(char msg[256])
   }
 };
 
+ICACHE_RAM_ATTR void interruptL()
+{
+  detachInterrupt(D6);
+  unsigned long mill = millis();
+  if (mill - lastInterupt[LEFT] > 2)
+  {
+    revolution.s32[LEFT] += motorDir[LEFT];
+    // Serial.println(revolution.u16[LEFT]);
+  }
+  lastInterupt[LEFT] = mill;
+  attachInterrupt(D6, interruptL, FALLING);
+}
+
+ICACHE_RAM_ATTR void interruptR()
+{
+  detachInterrupt(D5);
+  unsigned long mill = millis();
+  if (mill - lastInterupt[RIGHT] > 2)
+  {
+    revolution.s32[RIGHT] += motorDir[RIGHT];
+    // Serial.println(revolution.uRIGHT6[RIGHT]);
+  }
+  lastInterupt[RIGHT] = mill;
+  attachInterrupt(D5, interruptR, FALLING);
+}
+
 void setup()
 {
   Serial.begin(115200);
   setup_wifi();
   client.setServer(mqtt_server, 1883);
   client.setCallback(callback);
-  Serial.begin(115200); // opens serial port, sets data rate to 9600 bps
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(motor_left, OUTPUT);
   pinMode(dir_left, OUTPUT);
   pinMode(motor_right, OUTPUT);
   pinMode(dir_right, OUTPUT);
-  pidConst.f[0] = 0.015;
+  pinMode(D6, INPUT);
+  pinMode(D5, INPUT);
+  analogWrite(motor_right, 1000);
+  analogWrite(motor_left, 1000);
+  attachInterrupt(D6, interruptL, FALLING);
+  attachInterrupt(D5, interruptR, FALLING);
   pidConst.f[0] = 0.001;
-  pidConst.f[2] = 0.002;
-  pidConst.f[3] = 700;
+  pidConst.f[0] = 0.01;
+  pidConst.f[2] = 0.0;
+  pidConst.f[3] = 1000;
+  revolution.s32[0] = 0;
+  revolution.s32[1] = 0;
+  // r*d*pi/48/3/2= 37*pi/288*r=0.4036073*r mm
 };
 
 void loop()
@@ -261,11 +297,19 @@ void loop()
   client.loop();
   if (Serial.available())
   {
+
     std::fill_n(cmd_buf, 256, NULL);
     Serial.readBytesUntil('\n', cmd_buf, 256);
     Serial.print("Command recived: ");
     Serial.println(cmd_buf);
     // client.publish("message", cmd_buf);
     cmd_parse(cmd_buf);
+  }
+  if (millis() - uartTime > 100)
+  {
+    Serial.write("R");
+    Serial.write(revolution.u8, 8);
+    Serial.write("\n");
+    uartTime = millis();
   }
 }
