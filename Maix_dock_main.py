@@ -7,8 +7,10 @@ import struct
 import math
 import sensor
 import image
+import json
 from Maix import GPIO
 from fpioa_manager import fm
+print(board_info)
 fm.register(board_info.LED_R, fm.fpioa.GPIO0, force=True)
 led_r = GPIO(GPIO.GPIO0, GPIO.OUT)
 led_r.value(1)
@@ -38,9 +40,10 @@ center_x = 320/2
 x_boxes = 1
 y_boxes = 7
 lcd_string = ""
-path = [[0, 0], [0, 1], [1, 1], [1, 2], [2, 2], [3, 2], [4, 2], [5, 2]]
+path = [[0, 0], [1, 0], [1, 1]]
 path_point = 0
 reg = True
+go = True
 log = ""
 
 last_buf = "s\n"
@@ -53,62 +56,6 @@ class map():
 
     def get_cell(self, x, y):
         return self.map[y][x]
-
-
-class car ():
-    def __init__(self, radius, x, y, orientation, cell_size, path):
-        self.radius = radius
-        self.x = x
-        self.start_x = x
-        self.y = y
-        self.start_y = y
-        self.orientation = orientation
-        self.start_orientation = orientation
-        self.r = 0
-        self.last_r = 0
-        self.l = 0
-        self.last_l = 0
-        self.cell_size = cell_size
-        self.path = path
-        self.path_index = 0
-
-    def calc_orientaion(self):
-        return (self.l - self.r)/self.radius
-
-    def new_cell(self):
-        if self.r - self.last_r + self.l - self.last_l > 2 * self.cell_size:
-            self.last_r = self.r
-            self.last_l = self.r
-            self.path_index += 1
-            self.orientation = radius_mod(self.calc_orientaion())
-
-            return True
-        return False
-
-    def check_rotation(self):
-        if abs(radius_mod(self.calc_orientaion()) - self.orientation) < 0.2:
-            return True
-        return False
-
-    def calc_path_orientation(self, index):
-        x = self.path[index+1][0] - self.path[index][0]
-        y = self.path[index+1][1] - self.path[index][1]
-        return math.atan2(y, x)
-
-    def turn(self):
-        angel = self.calc_path_orientation(
-            self.path_index - 1) - self.calc_path_orientation(self.path_index)
-        if angel == 0:
-            return None
-        if angel == math.pi/2:
-            return 'r'
-        if angel == -math.pi/2:
-            return 'l'
-
-
-def radius_mod(radius):
-    a = radius % (2*math.pi)
-    return a - 2 * math.pi * (a > math.pi)
 
 
 def radian_overflow(radian):
@@ -227,129 +174,224 @@ def try_to_turn(segments: list, piece, dir: bool):
         return True
 
 
-def float_to_bytes(command, floats):
-    buf = bytearray(2 + 4 * len(floats))
-    struct.pack_into("<s", buf, 0, bytes(command, "utf-8"))
+def float_to_bytes(floats):
+    buf = bytearray(4 * len(floats))
     for i, f in enumerate(floats):
-        struct.pack_into("<f", buf, 1+4*i, f)
-    struct.pack_into("<s", buf, 1 + 4*len(floats), bytes('\n', "utf-8"))
-    print(struct.unpack_from('<B', buf, 5))
+        struct.pack_into("<f", buf, 4*i, f)
     return buf
+
+
+def send(data: bytes, command: str):
+    buf = bytearray(2 + len(data))
+    struct.pack_into("<sb", buf, 0, bytes(
+        command, "utf-8"), len(data))
+    if len(data) != 0:
+        struct.pack_into("<"+str(len(data))+"s", buf, 2, data)
+    return buf
+
+
+class car ():
+    def __init__(self, path):
+        self.orientation = 0
+        self.last_orientation = 0
+        self.x = 0
+        self.y = 0
+        self.last_x = 0
+        self.last_y = 0
+        self.path = path
+        self.path_index = 0
+        self.road_type = {"strait": 0, "left": 0, "right": 0,
+                          "leftT": 0, "rightT": 0, "T": 0, "4-juc": 0}
+
+    def new_cell(self):
+        if self.y > 244:
+            return False
+        print(self.x, self.last_x, self.y, self.last_y)
+        if abs(self.x - self.last_x) + abs(self.y - self.last_y) > 2:
+
+            self.path_index += 1
+            self.last_x = self.path[self.path_index][0]
+            self.last_y = self.path[self.path_index][1]
+            print(self.last_x, self.last_y)
+            #self.orientation = radius_mod(self.calc_orientaion())
+            print(max(self.road_type))
+            self.road_type = {"strait": 0, "left": 0, "right": 0,
+                              "leftT": 0, "rightT": 0, "T": 0, "4-juc": 0}
+            return True
+        return False
+
+    def check_rotation(self):
+        logs("lll")
+        print("ll")
+        if abs((self.orientation - self.last_orientation)) > math.pi/2:
+            self.last_orientation = self.orientation
+            logs("rotad")
+            print("roterad")
+            return True
+        return False
+
+    def calc_path_orientation(self, index):
+        print(self.path)
+        print(index)
+        x = self.path[index+1][0] - self.path[index][0]
+        y = self.path[index+1][1] - self.path[index][1]
+        return math.atan2(y, x)
+
+    def turn(self):
+        angel = self.calc_path_orientation(self.path_index)
+        if angel == 0:
+            return None
+        if angel == math.pi/2:
+            return 'r'
+        if angel == -math.pi/2:
+            return 'l'
+
+
+def radius_mod(radius):
+    a = radius % (2*math.pi)
+    return a - 2 * math.pi * (a > math.pi)
 
 
 print(board_info)
 
-# left_pin = GPIO(22, GPIO.IN, GPIO.PULL_NONE)
-# left_revolutions = 0
+robot = car(path)
 
 
-# def left_pin_callback():
-#     left_revolutions += 1
-#     # print("L")
+def logs(mes):
+    uart.write(send(bytes(mes, "utf-8"), "L"))
 
-
-# left_pin.irq(left_pin_callback, GPIO.IRQ_RISING)
-# right_pin = GPIO(23, GPIO.IN, GPIO.PULL_NONE)
-# right_revolutions = 0
-
-
-# def right_pin_callback():
-#     right_revolutions += 1
-#     # print("R")
-
-
-# right_pin.irq(right_pin_callback, GPIO.IRQ_RISING)
-robot = car(40, 0, 0, 0, 256, path)
 
 while True:
-    inData = uart.readline()
-    if inData != None:
-        print(inData, inData[0])
-        if inData[0] == 82:
+    # the hader contains the command character and lenght
+    # the while loop is for reading the whole buffer so no data get lost
+    while True:
+        header = uart.read(2)
+        if header == None:
+            # buffer is empty
+            break
+        mes = header[0]
+        try:
+            length = header[1]
+        except:
+            break
+        data = uart.read(length)
+        #print(data, length, len(data), mes)
+        if mes == 82:
+            print(data)
             try:
-                l = struct.unpack_from("<i", inData, 1)
-                r = struct.unpack_from("<i", inData, 5)
-
-                robot.l = 0.4036073 * l[0]
-                robot.r = 0.4036073 * r[0]
-                print(robot.calc_orientaion(), robot.l, robot.r)
+                l = struct.unpack_from("<i", data, 0)[0]
+                r = struct.unpack_from("<i", data, 4)[0]
             except:
                 print("to small")
+            print(robot.x, robot.y)
+        elif mes == 80:
+            # print(data)
+            try:
+                robot.x = struct.unpack_from("<d", data, 0)[0]
+                robot.y = struct.unpack_from("<d", data, 8)[0]
+                robot.orientation = radius_mod(
+                    struct.unpack_from("<d", data, 16)[0])
+                #print(robot.x, robot.y, robot.orientation)
+            except:
+                pass
+                #print("to small")
 
-    if robot.new_cell():
-        turn = robot.turn()
-        log = "new_cell" + turn
-        if turn != None:
-            curent_buf = turn + '\n'
-            reg = False
-    time.sleep_ms(50)
+        elif mes == 112:
+            # print(data)
+            robot.path = json.loads(data)
+            go = True
+            print("go")
+            print(robot.path)
+
+    # time.sleep_ms(50)
     # if read_data:
     #print("recv:\n", read_data.decode())
 
     img = sensor.snapshot()
     img.rotation_corr(0, 0, 180)
     segment = []
-    if reg:
-        img = img.binary([(0, 100, -80, 5, -128, 48)])
-        x_step = 320 // x_boxes
-        y_step = 240//y_boxes
-        for x in range(0, x_boxes):
-            for y in range(0, y_boxes):
-                segment.append(img.find_blobs([(0, 0, 0, 0, 0, 0)],
-                                              pixel_threshold=600, area_threshold=500, roi=(x_step*x, y_step*y, x_step, y_step)))
-        # print(segment)
-        blobs = img.find_blobs([(0, 0, 0, 0, 0, 0)],
-                               pixel_threshold=2000, area_threshold=2000)
-        regulating_segment = img.find_blobs([(0, 0, 0, 0, 0, 0)],
-                                            pixel_threshold=400, area_threshold=500, roi=(320//3, 2*240//3, 320//3, 240//3))
-        big_blob = None
-        if blobs or len(regulating_segment) != 0:
-            if regulating_segment:
-                err = center_x - regulating_segment[0][5]
+    if go:
+        if reg and False:  # robot.new_cell():
+            print(robot.x, robot.y)
+            print(len(robot.path), robot.path_index)
+            if len(robot.path) < robot.path_index + 2:
+                reg = False
+                go = False
+                uart.write(send(bytes(), "s"))
+                print("done")
+                logs("done")
             else:
-                for b in blobs:
-                    if big_blob:
-                        if b.pixels() > big_blob.pixels():
-                            big_blob = b
-                    else:
-                        big_blob = b
-                color = (255, 0, 0)
-                if big_blob[2] < 300:
-                    color = (255, 0, 0)
-                    err = (center_x - big_blob[5])
+                print("new cell")
+                turn = robot.turn()
+                log = "new_cell"
+                logs("new cell")
+                if turn != None:
+                    log += turn
+                    print("turn")
+                    logs(turn)
+                    curent_buf = send(bytes(), turn)
+                    reg = False
+        if reg:
+            img = img.binary([(0, 100, -80, 5, -128, 48)])
+            x_step = 320 // x_boxes
+            y_step = 240//y_boxes
+            for x in range(0, x_boxes):
+                for y in range(0, y_boxes):
+                    segment.append(img.find_blobs([(0, 0, 0, 0, 0, 0)],
+                                                  pixel_threshold=600, area_threshold=500, roi=(x_step*x, y_step*y, x_step, y_step)))
+            # print(segment)
+            blobs = img.find_blobs([(0, 0, 0, 0, 0, 0)],
+                                   pixel_threshold=2000, area_threshold=2000)
+            regulating_segment = img.find_blobs([(0, 0, 0, 0, 0, 0)],
+                                                pixel_threshold=400, area_threshold=500, roi=(320//3, 2*240//3, 320//3, 240//3))
+            big_blob = None
+            if blobs or len(regulating_segment) != 0:
+                if regulating_segment:
+                    err = center_x - regulating_segment[0][5]
                 else:
-                    color = (0, 255, 0)
-                    err = 0
-                img.draw_rectangle(big_blob[0:4], color=color, thickness=6)
-            curent_buf = float_to_bytes('e', [err])
+                    for b in blobs:
+                        if big_blob:
+                            if b.pixels() > big_blob.pixels():
+                                big_blob = b
+                        else:
+                            big_blob = b
+                    color = (255, 0, 0)
+                    if big_blob[2] < 300:
+                        color = (255, 0, 0)
+                        err = (center_x - big_blob[5])
+                    else:
+                        color = (0, 255, 0)
+                        err = 0
+                    img.draw_rectangle(big_blob[0:4], color=color, thickness=6)
+                curent_buf = send(bytes(float_to_bytes([err])), 'e')
         # uart.write(last_buf)
-            if err > margin:
+                if err > margin:
 
-                # uart.write('r'+str(motorForce)+'\n')
-                print("driving right")
-                led_g.value(1)
-                led_r.value(0)
-                led_b.value(1)
-            elif err < -margin:
-                # uart.write('l'+str(abs(motorForce))+'\n')
-                print("driving left")
-                led_g.value(1)
-                led_r.value(1)
-                led_b.value(0)
+                    # uart.write('r'+str(motorForce)+'\n')
+                    #print("driving right")
+                    led_g.value(1)
+                    led_r.value(0)
+                    led_b.value(1)
+                elif err < -margin:
+                    # uart.write('l'+str(abs(motorForce))+'\n')
+                    #print("driving left")
+                    led_g.value(1)
+                    led_r.value(1)
+                    led_b.value(0)
+                else:
+                    # uart.write('f\n')
+                    #print("driving forward")
+                    led_g.value(0)
+                    led_r.value(1)
+                    led_b.value(1)
             else:
-                # uart.write('f\n')
-                print("driving forward")
-                led_g.value(0)
+                curent_buf = send(bytes(), "s")
                 led_r.value(1)
+                led_g.value(1)
                 led_b.value(1)
-        else:
-            curent_buf = 's\n'
-            led_r.value(1)
-            led_g.value(1)
-            led_b.value(1)
-    else:
-        if car.check_rotation:
-            curent_buf = "s\n"
+        if robot.check_rotation():
+            curent_buf = send(bytes(), "s")
+            print("rotaad")
             reg = True
     if curent_buf != last_buf:
         last_buf = curent_buf
@@ -359,6 +401,8 @@ while True:
             if len(seg) != 0:
                 img.draw_rectangle(seg[0][0:4], color=(0, 0, 255), thickness=3)
     piece = which_piece(segment)
+    if piece != '':
+        robot.road_type[piece] += 1
     dir = True
     img.draw_string(1, 1, piece, color=(0, 0, 0), scale=2)
     img.draw_string(1, 20, log, color=(0, 0, 0), scale=2)
